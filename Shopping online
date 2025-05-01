@@ -1,0 +1,103 @@
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship, Session
+
+app = FastAPI()
+
+# إعداد قاعدة البيانات SQLite
+SQLALCHEMY_DATABASE_URL = "sqlite:///./shopping.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# الجداول (Users, Products, CartItems)
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    password = Column(String)
+
+class Product(Base):
+    __tablename__ = "products"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    description = Column(String)
+    price = Column(Float)
+
+class CartItem(Base):
+    __tablename__ = "cart_items"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    product_id = Column(Integer, ForeignKey("products.id"))
+    quantity = Column(Integer)
+
+    user = relationship("User")
+    product = relationship("Product")
+
+Base.metadata.create_all(bind=engine)
+
+# نماذج البيانات (Schemas)
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+class ProductCreate(BaseModel):
+    name: str
+    description: str
+    price: float
+
+class CartItemCreate(BaseModel):
+    user_id: int
+    product_id: int
+    quantity: int
+
+# الاتصال بقاعدة البيانات
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# تسجيل مستخدم
+@app.post("/register")
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="اسم المستخدم موجود مسبقًا")
+    new_user = User(username=user.username, password=user.password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": "تم تسجيل المستخدم بنجاح"}
+
+# إضافة منتج
+@app.post("/products")
+def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+    new_product = Product(**product.dict())
+    db.add(new_product)
+    db.commit()
+    db.refresh(new_product)
+    return new_product
+
+# عرض كل المنتجات
+@app.get("/products")
+def list_products(db: Session = Depends(get_db)):
+    return db.query(Product).all()
+
+# إضافة إلى سلة الشراء
+@app.post("/cart")
+def add_to_cart(item: CartItemCreate, db: Session = Depends(get_db)):
+    cart_item = CartItem(**item.dict())
+    db.add(cart_item)
+    db.commit()
+    db.refresh(cart_item)
+    return {"message": "تمت إضافة المنتج إلى السلة"}
+
+# عرض سلة مستخدم معيّن
+@app.get("/cart/{user_id}")
+def get_cart(user_id: int, db: Session = Depends(get_db)):
+    items = db.query(CartItem).filter(CartItem.user_id == user_id).all()
+    return items
